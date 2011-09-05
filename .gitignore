@@ -1,0 +1,4 @@
+#ignore any class files
+*.class
+#ignore the bin directory
+bin/
