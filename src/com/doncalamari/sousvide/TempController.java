@@ -6,7 +6,6 @@ import gnu.io.SerialPortEvent;
 import gnu.io.SerialPortEventListener;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -15,8 +14,8 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.GregorianCalendar;
 import java.util.Locale;
-import java.util.Properties;
 
 public class TempController implements SerialPortEventListener {
 
@@ -34,13 +33,21 @@ public class TempController implements SerialPortEventListener {
 	private File file;
 
 	private String readTemperature = EMPTY;
-	private Integer targetTemperature = Integer.valueOf(70); // roughly room temperature.
-	private Integer temperatureDelta = Integer.valueOf(0);
-	private Integer duration = Integer.valueOf(60 * 1000);
-	private Integer sampleInterval = Integer.valueOf(1000);
-	private String portName = "/dev/ttyUSB0";
+	private Integer targetTemperature = null;
+	private Integer temperatureDelta = null;
+	private Integer duration = null;
+	private Integer sampleInterval = null;
+	private String portName = null;
 
 	private Boolean heatOn = Boolean.FALSE;
+
+	public TempController(final Integer targetTemperature, final Integer temperatureDelta, final Integer duration, final Integer sampleInterval, final String portName) {
+		this.targetTemperature = targetTemperature;
+		this.temperatureDelta = temperatureDelta;
+		this.duration = duration;
+		this.sampleInterval = sampleInterval;
+		this.portName = portName;
+	}
 
 	public void initializeHardware() {
 		final CommPortIdentifier portId = findValidPort();
@@ -78,7 +85,7 @@ public class TempController implements SerialPortEventListener {
 
 	private CommPortIdentifier findValidPort() {
 		@SuppressWarnings("unchecked")
-        final Enumeration<CommPortIdentifier> portEnum = CommPortIdentifier.getPortIdentifiers();
+		final Enumeration<CommPortIdentifier> portEnum = CommPortIdentifier.getPortIdentifiers();
 
 		while (portEnum.hasMoreElements()) {
 			final CommPortIdentifier currPortId = portEnum.nextElement();
@@ -103,7 +110,10 @@ public class TempController implements SerialPortEventListener {
 	public void serialEvent(final SerialPortEvent oEvent) {
 
 		if (oEvent.getEventType() == SerialPortEvent.DATA_AVAILABLE) {
+			FileWriter writer = null;
 			try {
+				writer = new FileWriter(file, true);
+
 				final int available = input.available();
 				final byte chunk[] = new byte[available];
 
@@ -113,31 +123,43 @@ public class TempController implements SerialPortEventListener {
 
 				readTemperature = readTemperature + new String(chunk);
 
-				for (int i = 0; i < available; i++) {
-					if (chunk[i] == '\n' || chunk[i] == '\r') {
-						try {
-							checkToApplyHeat();
-							final FileWriter writer = new FileWriter(file, true);
-							synchronized (CSV_DATE_FORMAT) {
-								writer.write(CSV_DATE_FORMAT.format(new Date()) + "," + new String(readTemperature).trim() + "," + heatOn + "\n");
-							}
-							writer.close();
-
-							System.out.print(".");// just to let the user know something is going on.
-							readTemperature = EMPTY;
-						} catch (IOException e) {
-							// should never happen
-							System.err.println(e.toString());
-						}
-
-						return;
-					}
-				}
+				chopChunk(writer, available, chunk);
 			} catch (IOException e) {
 				System.err.println(e.toString());
 			} catch (Exception e) {
 				// just to make sure the program doesn't fail
 				System.err.println(e.toString());
+			} finally {
+				if (null != writer) {
+					try {
+						writer.close();
+					} catch (IOException e) {
+						// should never happen
+						System.err.println(e.toString());
+					}
+				}
+			}
+		}
+	}
+
+	private void chopChunk(final FileWriter writer, final int available, final byte[] chunk) {
+		for (int i = 0; i < available; i++) {
+			if (chunk[i] == '\n' || chunk[i] == '\r') {
+				try {
+					checkToApplyHeat();
+
+					synchronized (CSV_DATE_FORMAT) {
+						writer.write(CSV_DATE_FORMAT.format(GregorianCalendar.getInstance().getTime()) + "," + String.valueOf(readTemperature).trim() + "," + heatOn + "\n");
+					}
+
+					System.out.print(".");// just to let the user know something is going on.
+					readTemperature = EMPTY;
+				} catch (IOException e) {
+					// should never happen
+					System.err.println(e.toString());
+				}
+
+				break;
 			}
 		}
 	}
@@ -181,32 +203,6 @@ public class TempController implements SerialPortEventListener {
 
 	public void getTemp() {
 		sendSignal("2");
-	}
-
-	public void readProperties() {
-		System.out.println("Reading settings properties file.");
-
-		final Properties prop = new Properties();
-		try {
-			prop.load(new FileInputStream("settings.properties"));
-
-			duration = Integer.valueOf(prop.get("duration.minutes").toString()) * 60 * 1000;
-			sampleInterval = Integer.valueOf(prop.get("sample.interval.seconds").toString()) * 1000;
-			temperatureDelta = Integer.valueOf(prop.get("temperature.delta.degrees").toString());
-			targetTemperature = Integer.valueOf(prop.get("temperature.target.degrees").toString());
-			portName = prop.get("serial.port").toString();
-			System.out.println("Done. Found values:");
-		} catch (NumberFormatException e) {
-			System.out.println("Error reading properties. Using default values:");
-		} catch (IOException e) {
-			System.out.println("Error reading properties. Using default values:");
-		}
-
-		System.out.println("duration = " + duration / (60 * 1000) + " minutes.");
-		System.out.println("sample interval = " + sampleInterval / 1000 + " seconds.");
-		System.out.println("temperature delta = " + temperatureDelta + " degrees F.");
-		System.out.println("target temperature = " + targetTemperature + " degrees F.");
-		System.out.println("serial port " + portName);
 	}
 
 	public SerialPort getSerialPort() {
